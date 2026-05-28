@@ -7,65 +7,111 @@ pub enum ParseError {
     Unknown(String),
 }
 
-/// Parse an algorithm string into a sequence of `FaceMove`s.
+/// One primitive step a token expands into: either a whole-cube rotation or a
+/// single-face turn. Wide and slice moves expand to a rotation plus a face
+/// turn (e.g. `Rw = x L`, `M = L' x' R`); plain rotations expand to a single
+/// `Rot`. Keeping the two kinds distinct lets the parser handle rotations by
+/// re-framing the moves that follow, rather than permuting cube pieces.
+#[derive(Clone, Copy)]
+enum Prim {
+    Rot(FaceMove),
+    Face(FaceMove),
+}
+
+impl Prim {
+    fn inverse(self) -> Prim {
+        match self {
+            Prim::Rot(g) => Prim::Rot(g.inverse()),
+            Prim::Face(m) => Prim::Face(m.inverse()),
+        }
+    }
+}
+
+/// Parse an algorithm string into a sequence of plain face-move `FaceMove`s.
+///
+/// Rotations never permute pieces here: we track the running cube orientation
+/// and, for each face turn, emit the equivalent fixed-frame turn (the
+/// conjugate `orient · face · orient⁻¹`). Wide and slice moves are expanded to
+/// a face turn plus the rotation they carry, so they feed through the same
+/// machinery.
+///
+/// The output is a sequence of plain face turns. Any net cube rotation the alg
+/// leaves behind (from wide/slice moves) is intentionally dropped — downstream
+/// classification reorients over all 24 cube rotations anyway, so the net
+/// rotation never needs to be applied to pieces.
+///
 /// Returns `Err(ParseError::BigCube)` if any big-cube token is found.
 pub fn parse_alg(s: &str, ms: &MoveSet) -> Result<Vec<FaceMove>, ParseError> {
-    let mut out = Vec::new();
+    let mut prims = Vec::new();
     for token in s.split_whitespace() {
-        let m = parse_token(token, ms)?;
-        out.push(m);
+        token_prims(token, ms, &mut prims)?;
+    }
+
+    let mut out = Vec::new();
+    let mut orient = FaceMove::identity();
+    for p in prims {
+        match p {
+            // A rotation re-frames everything after it; it permutes no pieces
+            // now, it just updates the running orientation.
+            Prim::Rot(g) => orient = orient.then(&g),
+            // A face turn in the current frame is that turn conjugated back
+            // into the fixed frame.
+            Prim::Face(m) => {
+                out.push(orient.then(&m).then(&orient.inverse()));
+            }
+        }
+    }
+    // Append the net cube rotation so the output is exactly equivalent to the
+    // input alg. Setup rotations (a leading `y`) and intrinsic conjugations
+    // (`x' … x`) are thus both preserved faithfully; downstream classification
+    // reorients over all 24 rotations, which absorbs whatever net rotation
+    // remains. Skip a no-op identity so it never blocks trailing-AUF stripping.
+    if !is_identity(&orient) {
+        out.push(orient);
     }
     Ok(out)
 }
 
-fn parse_token(token: &str, ms: &MoveSet) -> Result<FaceMove, ParseError> {
-    let bytes = token.as_bytes();
+fn is_identity(m: &FaceMove) -> bool {
+    let id = FaceMove::identity();
+    m.cp == id.cp && m.co == id.co && m.ep == id.ep && m.eo == id.eo
+}
 
-    // Big-cube prefix: digit(s) before the move letter (e.g., "3r", "4Rw").
+/// Expand one token into its primitive steps, appended to `out`.
+fn token_prims(token: &str, ms: &MoveSet, out: &mut Vec<Prim>) -> Result<(), ParseError> {
+    let bytes = token.as_bytes();
     if bytes.first().is_some_and(|b| b.is_ascii_digit()) {
         return Err(ParseError::BigCube);
     }
 
-    // Separate base letter(s) from suffix.
-    // Suffix can be: '', "2", "2'", or a bare "'"
-    // Base: one or two chars (e.g., "Rw" = wide R)
     let (base, suffix) = split_base_suffix(token)?;
-
     let prime = suffix.contains('\'');
     let double = suffix.contains('2');
 
-    let fm = lookup_base(base, ms, prime, double)?;
-    Ok(fm)
-}
+    // Quarter-turn (amount = 1) expansion of the base move.
+    let quarter = quarter_prims(base, ms)?;
 
-fn split_base_suffix(token: &str) -> Result<(&str, &str), ParseError> {
-    let bytes = token.as_bytes();
-    // Find where the base ends: it's alpha chars (and 'w' for wide).
-    // Suffix = everything after the last alpha char that is part of base.
-    // Strategy: base is the leading alpha chars (possibly ending with 'w'),
-    // suffix is trailing ' and/or 2.
-    let end = bytes
-        .iter()
-        .position(|b| !b.is_ascii_alphabetic())
-        .unwrap_or(bytes.len());
-
-    // Handle 'w' suffix on wide moves like "Rw", "Lw"
-    let base = &token[..end];
-    let suffix = &token[end..];
-
-    if base.is_empty() {
-        return Err(ParseError::Unknown(token.to_string()));
+    if double {
+        out.extend_from_slice(&quarter);
+        out.extend_from_slice(&quarter);
+    } else if prime {
+        // Inverse of a sequence: reverse the order and invert each step.
+        out.extend(quarter.iter().rev().map(|p| p.inverse()));
+    } else {
+        out.extend_from_slice(&quarter);
     }
-    Ok((base, suffix))
+    Ok(())
 }
 
-fn lookup_base(
-    base: &str,
-    ms: &MoveSet,
-    prime: bool,
-    double: bool,
-) -> Result<FaceMove, ParseError> {
-    // Normalize wide notation: "Rw" → same as lowercase "r"
+/// The quarter-turn primitive expansion of a base move (no suffix applied).
+///
+/// Wide/slice identities (all verified by the move-table composition):
+/// `Rw = x L`, `Lw = x' R`, `Uw = y D`, `Dw = y' U`, `Fw = z B`, `Bw = z' F`,
+/// `M = L' x' R`, `E = D' y' U`, `S = F' z B`.
+fn quarter_prims(base: &str, ms: &MoveSet) -> Result<Vec<Prim>, ParseError> {
+    use Prim::{Face, Rot};
+
+    // Wide notation "Rw" is the same as lowercase "r".
     let is_wide = base.ends_with('w');
     let core = if is_wide {
         &base[..base.len() - 1]
@@ -73,80 +119,52 @@ fn lookup_base(
         base
     };
 
-    let fm: FaceMove = match (core, is_wide, prime, double) {
-        // ── U-layer ──────────────────────────────────────────────────────
-        ("U", false, false, false) => ms.u,
-        ("U", false, true, false) => ms.up,
-        ("U", false, _, true) => ms.u2,
-        ("u", _, false, false) | ("U", true, false, false) => ms.uw,
-        ("u", _, true, false) | ("U", true, true, false) => ms.uwp,
-        ("u", _, _, true) | ("U", true, _, true) => ms.uw2,
+    let prims = match (core, is_wide) {
+        // ── plain faces ──────────────────────────────────────────────────
+        ("U", false) => vec![Face(ms.u)],
+        ("D", false) => vec![Face(ms.d)],
+        ("R", false) => vec![Face(ms.r)],
+        ("L", false) => vec![Face(ms.l)],
+        ("F", false) => vec![Face(ms.f)],
+        ("B", false) => vec![Face(ms.b)],
 
-        // ── D-layer ──────────────────────────────────────────────────────
-        ("D", false, false, false) => ms.d,
-        ("D", false, true, false) => ms.dp,
-        ("D", false, _, true) => ms.d2,
-        ("d", _, false, false) | ("D", true, false, false) => ms.dw,
-        ("d", _, true, false) | ("D", true, true, false) => ms.dwp,
-        ("d", _, _, true) | ("D", true, _, true) => ms.dw2,
+        // ── wide moves = face turn + the rotation they carry ─────────────
+        ("u", _) | ("U", true) => vec![Rot(ms.y), Face(ms.d)],
+        ("d", _) | ("D", true) => vec![Rot(ms.yp), Face(ms.u)],
+        ("r", _) | ("R", true) => vec![Rot(ms.x), Face(ms.l)],
+        ("l", _) | ("L", true) => vec![Rot(ms.xp), Face(ms.r)],
+        ("f", _) | ("F", true) => vec![Rot(ms.z), Face(ms.b)],
+        ("b", _) | ("B", true) => vec![Rot(ms.zp), Face(ms.f)],
 
-        // ── R-layer ──────────────────────────────────────────────────────
-        ("R", false, false, false) => ms.r,
-        ("R", false, true, false) => ms.rp,
-        ("R", false, _, true) => ms.r2,
-        ("r", _, false, false) | ("R", true, false, false) => ms.rw,
-        ("r", _, true, false) | ("R", true, true, false) => ms.rwp,
-        ("r", _, _, true) | ("R", true, _, true) => ms.rw2,
+        // ── slices = two faces straddling a rotation ─────────────────────
+        ("M", false) => vec![Face(ms.lp), Rot(ms.xp), Face(ms.r)],
+        ("E", false) => vec![Face(ms.dp), Rot(ms.yp), Face(ms.u)],
+        ("S", false) => vec![Face(ms.fp), Rot(ms.z), Face(ms.b)],
 
-        // ── L-layer ──────────────────────────────────────────────────────
-        ("L", false, false, false) => ms.l,
-        ("L", false, true, false) => ms.lp,
-        ("L", false, _, true) => ms.l2,
-        ("l", _, false, false) | ("L", true, false, false) => ms.lw,
-        ("l", _, true, false) | ("L", true, true, false) => ms.lwp,
-        ("l", _, _, true) | ("L", true, _, true) => ms.lw2,
-
-        // ── F-layer ──────────────────────────────────────────────────────
-        ("F", false, false, false) => ms.f,
-        ("F", false, true, false) => ms.fp,
-        ("F", false, _, true) => ms.f2,
-        ("f", _, false, false) | ("F", true, false, false) => ms.fw,
-        ("f", _, true, false) | ("F", true, true, false) => ms.fwp,
-        ("f", _, _, true) | ("F", true, _, true) => ms.fw2,
-
-        // ── B-layer ──────────────────────────────────────────────────────
-        ("B", false, false, false) => ms.b,
-        ("B", false, true, false) => ms.bp,
-        ("B", false, _, true) => ms.b2,
-        ("b", _, false, false) | ("B", true, false, false) => ms.bw,
-        ("b", _, true, false) | ("B", true, true, false) => ms.bwp,
-        ("b", _, _, true) | ("B", true, _, true) => ms.bw2,
-
-        // ── Slices ───────────────────────────────────────────────────────
-        ("M", false, false, false) => ms.m,
-        ("M", false, true, false) => ms.mp,
-        ("M", false, _, true) => ms.m2,
-        ("E", false, false, false) => ms.e,
-        ("E", false, true, false) => ms.ep_move,
-        ("E", false, _, true) => ms.e2,
-        ("S", false, false, false) => ms.s,
-        ("S", false, true, false) => ms.sp,
-        ("S", false, _, true) => ms.s2,
-
-        // ── Rotations ────────────────────────────────────────────────────
-        ("x", _, false, false) => ms.x,
-        ("x", _, true, false) => ms.xp,
-        ("x", _, _, true) => ms.x2,
-        ("y", _, false, false) => ms.y,
-        ("y", _, true, false) => ms.yp,
-        ("y", _, _, true) => ms.y2,
-        ("z", _, false, false) => ms.z,
-        ("z", _, true, false) => ms.zp,
-        ("z", _, _, true) => ms.z2,
+        // ── rotations ────────────────────────────────────────────────────
+        ("x", _) => vec![Rot(ms.x)],
+        ("y", _) => vec![Rot(ms.y)],
+        ("z", _) => vec![Rot(ms.z)],
 
         _ => return Err(ParseError::Unknown(format!("{core} wide={is_wide}"))),
     };
-    Ok(fm)
+    Ok(prims)
+}
+
+fn split_base_suffix(token: &str) -> Result<(&str, &str), ParseError> {
+    let bytes = token.as_bytes();
+    let end = bytes
+        .iter()
+        .position(|b| !b.is_ascii_alphabetic())
+        .unwrap_or(bytes.len());
+
+    let base = &token[..end];
+    let suffix = &token[end..];
+
+    if base.is_empty() {
+        return Err(ParseError::Unknown(token.to_string()));
+    }
+    Ok((base, suffix))
 }
 
 /// Invert a sequence of moves (reverse + invert each).
@@ -166,8 +184,7 @@ pub fn is_u_family(m: &FaceMove, ms: &MoveSet) -> bool {
 }
 
 pub fn is_rotation(m: &FaceMove, ms: &MoveSet) -> bool {
-    let rotations =
-        [ms.x, ms.xp, ms.x2, ms.y, ms.yp, ms.y2, ms.z, ms.zp, ms.z2];
+    let rotations = [ms.x, ms.xp, ms.x2, ms.y, ms.yp, ms.y2, ms.z, ms.zp, ms.z2];
     rotations.iter().any(|r| moves_eq(m, r))
 }
 

@@ -73,4 +73,32 @@ impl CubeState {
     pub fn ll_edges_oriented(&self) -> bool {
         self.eo[0..4].iter().all(|&x| x == 0)
     }
+
+    /// True if everything except the FR last slot is solved: the D-cross
+    /// (D-layer edges 4–7), the three back F2L corners (slots 5–7), and the
+    /// three back E-layer edges (slots 9–11). The DFR corner (slot 4) and FR
+    /// edge (slot 8) are the free last slot a ZBLS alg inserts. Used the same
+    /// way as `f2l_solved` for ZBLL: try every rotation, keep the ones that
+    /// land this solved, to reorient out any net rotation.
+    pub fn f2l_minus_fr_solved(&self) -> bool {
+        // Three back F2L corners home and oriented.
+        for i in 5..8 {
+            if self.cp[i] != i as u8 || self.co[i] != 0 {
+                return false;
+            }
+        }
+        // Full D-cross.
+        for i in 4..8 {
+            if self.ep[i] != i as u8 || self.eo[i] != 0 {
+                return false;
+            }
+        }
+        // Three back E-layer edges (FL, BL, BR).
+        for i in 9..12 {
+            if self.ep[i] != i as u8 || self.eo[i] != 0 {
+                return false;
+            }
+        }
+        true
+    }
 }

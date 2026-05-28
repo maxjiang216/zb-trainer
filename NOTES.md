@@ -29,9 +29,9 @@ Slot numbering (fixed frame):
 
 A move (`moves.rs::FaceMove`) is `cp/co/ep/eo` arrays where `cp[i]=j` means "the
 piece in slot `i` moves to slot `j`", and `co[i]` is the orientation delta added
-when leaving slot `i`. Wide moves, slices, and rotations are derived from the
-six face moves + three slices at startup in `MoveSet::build()`
-(`r = R·M'`, `x = R·M'·L'`, `y = U·E'·D'`, `z = F·S·B'`, etc.).
+when leaving slot `i`. `MoveSet` stores the six faces and three rotations (`x`,
+`y`, `z`, derived once from the private slice constants via `x = R·M'·L'` etc.).
+Wide and slice moves are **not** stored — the parser expands them.
 
 ## Key design decisions
 
@@ -39,14 +39,21 @@ six face moves + three slices at startup in `MoveSet::build()`
   onto a solved cube, leaves the F2L (D-layer corners, D-layer edges, E-layer
   edges) intact. Algs that fail this in every orientation are not real LL algs
   (e.g. OLL-style CFOP sequences loosely labelled "ZBLL") and are dropped.
-- **Rotation-aware F2L + fingerprint.** Wide and slice moves move centers, so an
-  alg can finish in a net-rotated frame. Since `CubeState` does **not** track
-  centers, we instead try all 24 cube orientations (`MoveSet::cube_rotations()`)
-  and keep the ones that land F2L solved; that undoes any net rotation. (We
-  chose the 24-rotation search over adding center tracking — same result, less
-  state to maintain. An even cleaner alternative — having rotations remap the
-  subsequent moves and parsing wide/slice as face+rotation — was considered and
-  deferred; the current approach is correct and tested.)
+- **Rotations remap moves, not pieces (`parse.rs`).** Wide and slice moves
+  rotate the cube's centers, so an alg can finish in a net-rotated frame. Rather
+  than give rotations piece tables, the parser tracks a running orientation and
+  emits each face turn conjugated back into the fixed frame
+  (`orient · face · orient⁻¹`). Wide/slice moves expand to a face turn plus the
+  rotation they carry (`Rw = x L`, `M = L' x' R`, …), feeding the same path. The
+  net cube rotation is appended at the end so the output is exactly equivalent
+  to the alg. This handles setup rotations (a leading `y`) and intrinsic
+  conjugations (`x' … x`) uniformly — it fixed three speedcubedb algs the old
+  string-stripping approach mis-handled (`H 28`, `U 41`, `U 42`).
+- **Rotation-aware F2L + fingerprint.** Since `CubeState` does **not** track
+  centers, classification tries all 24 cube orientations
+  (`MoveSet::cube_rotations()`) and keeps the ones that land F2L solved; that
+  absorbs whatever net rotation the parser appended. (Chosen over center
+  tracking — same result, less state.)
 - **AUF is separate from cube rotation.** After reorienting, AUF is normalized
   by applying the four U-face turns and taking the lexicographically minimum
   fingerprint. A whole-cube `y` rotation is **not** AUF — it moves the D-layer
@@ -54,6 +61,11 @@ six face moves + three slices at startup in `MoveSet::build()`
 - **Fingerprint = full LL state up to AUF.** `extract_ll_fingerprint` records
   `(piece, orientation)` for the four LL corners and four LL edges. This matches
   speedcubedb's case granularity exactly (see verification).
+- **ZBLS uses the same scheme.** `zbls_canonical` is rotation-aware too: it
+  keeps rotations where everything *except* the FR last slot is solved
+  (`cube.rs::f2l_minus_fr_solved`), then reads the DFR-corner + FR-edge + LL-edge
+  fingerprint over the 4 AUF turns. Algs that don't reduce to a last-slot case
+  under any rotation are skipped rather than false-grouped.
 
 ## Bugs found and fixed
 
@@ -86,27 +98,29 @@ spuriously failed `f2l_solved`.
 
 ## Verification & results
 
-- All 24 cube rotations close into the proper group; all 6 unit tests pass; no
-  clippy warnings.
-- The 464 valid speedcubedb algs produce **464 distinct canonical fingerprints**
-  — a 1:1 match with their case definition, confirming the fingerprint
-  granularity is exactly right.
-- Dataset: **1,588 ZBLL algs → 559 distinct cases**, covering **343 / 472**
-  known OCLL-ZBLL cases. 559 > 472 is expected and correct: the dataset also
-  contains corners-already-oriented (PLL-type) and H-symmetry last-layer states
-  that are legitimately distinct up to AUF but lie outside the 472-case OCLL set.
+- All 24 cube rotations close into the proper group; all 5 unit tests pass;
+  default `cargo clippy` is clean.
+- The valid speedcubedb algs produce a 1:1 set of distinct canonical
+  fingerprints, confirming the fingerprint granularity exactly matches their
+  case definition.
+- Dataset: **1,588 ZBLL algs → 572 distinct cases**, covering **343 / 472**
+  known OCLL-ZBLL cases; **710 ZBLS algs → 221 distinct cases**. 572 > 472 is
+  expected and correct: the dataset also contains corners-already-oriented
+  (PLL-type) and H-symmetry last-layer states that are legitimately distinct up
+  to AUF but lie outside the 472-case OCLL set.
 
 ### Known-bad reference data
-Eight `known_zbll.json` entries (`H 6/18/19/28/29/40`, `T 46`, `L 23`) do **not**
+Seven `known_zbll.json` entries (`H 6/18/19/29/40`, `T 46`, `L 23`) do **not**
 preserve F2L under any of the 24 rotations — i.e. they are mistyped / alternate
 algs scraped from speedcubedb, not model bugs. They are pinned in
 `test_known_zbll_all_valid` so a genuine regression still trips the test.
+(`H 28`, `U 41`, `U 42` were previously in this list; the rotation-remapping
+parser handles their wrapping rotations correctly and they now validate.)
 
 ## Possible future work
-- Refactor to the rotation-remapping design (rotations transform subsequent
-  moves; wide/slice parse as face move + rotation), deleting the slice/rotation/
-  wide piece tables entirely. Cleaner and avoids the orientation-table class of
-  bug above; deferred since the current model is correct.
 - Reduce cases by full symmetry (mirror/inverse) to map onto the 472 reps for
   apples-to-apples coverage.
-- Make ZBLS classification rotation-aware too (currently 4-U-rotation only).
+- The full `lint.sh` runs clippy with `-D warnings` + pedantic + nursery; the
+  codebase predates that bar and has pre-existing findings (integer casts,
+  `use_self`, etc.). Default `cargo clippy` is clean. Bringing it to full
+  pedantic-clean is a separate cleanup.

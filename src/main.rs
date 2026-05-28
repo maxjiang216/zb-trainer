@@ -9,9 +9,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use crate::moves::{FaceMove, MoveSet};
-use crate::normalize::{
-    strip_auf, strip_auf_start, zbll_canonical, zbls_canonical, ZbllCase,
-};
+use crate::normalize::{strip_auf, strip_auf_start, zbll_canonical, zbls_canonical, ZbllCase};
 use crate::parse::{parse_alg, ParseError};
 
 #[derive(Deserialize)]
@@ -39,15 +37,16 @@ struct AlgEntry {
 }
 
 fn main() {
-    let path =
-        PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| {
-            "../reco_scraper/reco_zbll_fixed.json".to_string()
-        }));
+    let path = PathBuf::from(
+        std::env::args()
+            .nth(1)
+            .unwrap_or_else(|| "../reco_scraper/reco_zbll_fixed.json".to_string()),
+    );
 
     let data = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Cannot read {}: {e}", path.display()));
-    let records: Vec<Record> = serde_json::from_str(&data)
-        .unwrap_or_else(|e| panic!("JSON parse error: {e}"));
+    let records: Vec<Record> =
+        serde_json::from_str(&data).unwrap_or_else(|e| panic!("JSON parse error: {e}"));
 
     let ms = MoveSet::build();
     // Precompute the 24 cube orientations once; reused for every alg to
@@ -63,8 +62,7 @@ fn main() {
     let mut zbll_total = 0usize;
 
     // ── ZBLS grouping ─────────────────────────────────────────────────────
-    let mut zbls_groups: HashMap<crate::normalize::ZblsCase, Vec<AlgEntry>> =
-        HashMap::new();
+    let mut zbls_groups: HashMap<crate::normalize::ZblsCase, Vec<AlgEntry>> = HashMap::new();
     let mut zbls_skip = 0usize;
     let mut zbls_total = 0usize;
 
@@ -90,9 +88,7 @@ fn main() {
                     // orientation). Algs that move D-layer pieces — e.g.
                     // OLL-style CFOP sequences loosely labeled "ZBLL" — never
                     // land F2L solved under any rotation and are excluded.
-                    let Some((case, edges_oriented)) =
-                        zbll_canonical(core, &rots)
-                    else {
+                    let Some((case, edges_oriented)) = zbll_canonical(core, &rots) else {
                         zbll_skip_not_ll += 1;
                         continue;
                     };
@@ -124,7 +120,10 @@ fn main() {
                         zbls_skip += 1;
                         continue;
                     }
-                    let case = zbls_canonical(core);
+                    let Some(case) = zbls_canonical(core, &rots) else {
+                        zbls_skip += 1;
+                        continue;
+                    };
                     zbls_groups.entry(case).or_default().push(AlgEntry {
                         solve_id: rec.id,
                         solver: rec.solver_name.clone(),
@@ -159,8 +158,7 @@ fn main() {
     println!();
 
     // Coverage: all ZBLL cases from speedcubedb.com vs our collected data.
-    let all_fingerprints: std::collections::HashSet<_> =
-        zbll_groups.keys().collect();
+    let all_fingerprints: std::collections::HashSet<_> = zbll_groups.keys().collect();
     let known_path = path
         .parent()
         .unwrap_or(std::path::Path::new("."))
@@ -191,9 +189,7 @@ fn main() {
                 None => parse_err.push(format!("{name}: {}", k.alg)),
             }
         }
-        println!(
-            "── Coverage: speedcubedb.com ZBLL cases ──────────────────────"
-        );
+        println!("── Coverage: speedcubedb.com ZBLL cases ──────────────────────");
         // Group missed by subset
         let mut missed_by_subset: std::collections::BTreeMap<&str, Vec<u32>> =
             std::collections::BTreeMap::new();
@@ -232,9 +228,7 @@ fn main() {
             let name = format!("ZBLL {} {}", k.subset, k.n);
             let e = by_subset.entry(k.subset.as_str()).or_default();
             e.1 += 1;
-            if !missed.contains(&name)
-                && !parse_err.iter().any(|s| s.starts_with(&name))
-            {
+            if !missed.contains(&name) && !parse_err.iter().any(|s| s.starts_with(&name)) {
                 e.0 += 1;
             }
         }
@@ -248,15 +242,13 @@ fn main() {
     println!("── Top ZBLL cases ────────────────────────────────────────────");
     for (case, entries) in zbll_sorted.iter().take(30) {
         let solvers: Vec<_> = {
-            let mut s: Vec<_> =
-                entries.iter().map(|e| e.solver.as_str()).collect();
+            let mut s: Vec<_> = entries.iter().map(|e| e.solver.as_str()).collect();
             s.sort();
             s.dedup();
             s
         };
         let algs: Vec<_> = {
-            let mut a: Vec<_> =
-                entries.iter().map(|e| e.raw_alg.as_str()).collect();
+            let mut a: Vec<_> = entries.iter().map(|e| e.raw_alg.as_str()).collect();
             a.sort();
             a.dedup();
             a
@@ -289,8 +281,7 @@ fn main() {
 
     for (case, entries) in zbls_sorted.iter().take(20) {
         let solvers: Vec<_> = {
-            let mut s: Vec<_> =
-                entries.iter().map(|e| e.solver.as_str()).collect();
+            let mut s: Vec<_> = entries.iter().map(|e| e.solver.as_str()).collect();
             s.sort();
             s.dedup();
             s
@@ -323,11 +314,7 @@ fn spot_check(ms: &MoveSet, rots: &[FaceMove], a: &str, b: &str) {
     );
 }
 
-fn parse_and_canon(
-    ms: &MoveSet,
-    rots: &[FaceMove],
-    alg: &str,
-) -> Option<ZbllCase> {
+fn parse_and_canon(ms: &MoveSet, rots: &[FaceMove], alg: &str) -> Option<ZbllCase> {
     let moves = parse_alg(alg, ms).ok()?;
     let core = strip_auf(&moves, ms);
     if core.is_empty() {
@@ -342,36 +329,30 @@ mod tests {
     use crate::cube::CubeState;
     use crate::parse::invert_alg;
 
-    /// Verify basic move table sanity: X^4 = identity, X*X' = identity.
+    /// Verify every stored move: quarter^4 = identity, quarter·prime = identity,
+    /// and double = quarter². Covers all six faces and three rotations.
     #[test]
     fn test_move_identity() {
         let ms = MoveSet::build();
         let id = CubeState::solved();
-        for (name, m) in [
-            ("F", ms.f),
-            ("B", ms.b),
-            ("L", ms.l),
-            ("R", ms.r),
-            ("U", ms.u),
-            ("D", ms.d),
+        for (name, q, p, d) in [
+            ("U", ms.u, ms.up, ms.u2),
+            ("D", ms.d, ms.dp, ms.d2),
+            ("R", ms.r, ms.rp, ms.r2),
+            ("L", ms.l, ms.lp, ms.l2),
+            ("F", ms.f, ms.fp, ms.f2),
+            ("B", ms.b, ms.bp, ms.b2),
+            ("x", ms.x, ms.xp, ms.x2),
+            ("y", ms.y, ms.yp, ms.y2),
+            ("z", ms.z, ms.zp, ms.z2),
         ] {
             assert_eq!(
-                id.apply(&m).apply(&m).apply(&m).apply(&m),
+                id.apply(&q).apply(&q).apply(&q).apply(&q),
                 id,
                 "{name}^4 != identity"
             );
-        }
-        for (name, m, mi) in [
-            ("F", ms.f, ms.fp),
-            ("r", ms.rw, ms.rwp),
-            ("x", ms.x, ms.xp),
-            ("y", ms.y, ms.yp),
-        ] {
-            assert_eq!(
-                id.apply(&m).apply(&mi),
-                id,
-                "{name}*{name}' != identity"
-            );
+            assert_eq!(id.apply(&q).apply(&p), id, "{name}·{name}' != identity");
+            assert_eq!(id.apply(&d), id.apply(&q).apply(&q), "{name}2 != {name}²");
         }
     }
 
@@ -382,8 +363,7 @@ mod tests {
         let rots = ms.cube_rotations();
         let a = parse_and_canon(&ms, &rots, "F R' F' r U R U' r'").unwrap();
         let b = parse_and_canon(&ms, &rots, "U' F R' F' r U R U' r'").unwrap();
-        let c =
-            parse_and_canon(&ms, &rots, "U2 F R' F' r U R U' r' U'").unwrap();
+        let c = parse_and_canon(&ms, &rots, "U2 F R' F' r U R U' r' U'").unwrap();
         assert_eq!(a, b, "pre-AUF changed fingerprint");
         assert_eq!(a, c, "pre+post AUF changed fingerprint");
     }
@@ -452,12 +432,12 @@ mod tests {
             .expect("known_zbll.json must be present at crate root");
         let known: Vec<KnownCase> = serde_json::from_str(&data).unwrap();
 
-        // Scraped algs that don't close to a valid LL case under any rotation.
-        let known_bad: std::collections::HashSet<&str> = [
-            "H 6", "H 18", "H 19", "H 28", "H 29", "H 40", "T 46", "L 23",
-        ]
-        .into_iter()
-        .collect();
+        // Scraped algs that don't close to a valid LL case under any rotation
+        // — mistyped / alternate entries from speedcubedb, not model bugs.
+        let known_bad: std::collections::HashSet<&str> =
+            ["H 6", "H 18", "H 19", "H 29", "H 40", "T 46", "L 23"]
+                .into_iter()
+                .collect();
 
         let mut unexpected = Vec::new();
         for k in &known {

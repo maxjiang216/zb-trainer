@@ -154,7 +154,16 @@ pub const S: FaceMove = FaceMove {
     eo: [1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0],
 };
 
-// Lazy-built move table for all parsed tokens.
+/// The move table the parser draws from: the six faces and three whole-cube
+/// rotations, each with its prime and double. Wide and slice moves are *not*
+/// stored — the parser expands them into a face turn plus a rotation (see
+/// `parse::quarter_prims`), so they need no dedicated tables here. The slice
+/// constants `M`/`E`/`S` still exist privately, used only to derive `x/y/z`.
+///
+/// This is the complete face+rotation catalog; the current parser references
+/// most but not every variant (e.g. it builds doubles by repetition rather
+/// than reading `r2`), so a few entries are unused outside tests.
+#[allow(dead_code)]
 pub struct MoveSet {
     pub u: FaceMove,
     pub up: FaceMove,
@@ -174,36 +183,6 @@ pub struct MoveSet {
     pub b: FaceMove,
     pub bp: FaceMove,
     pub b2: FaceMove,
-    // slices
-    pub m: FaceMove,
-    pub mp: FaceMove,
-    pub m2: FaceMove,
-    pub e: FaceMove,
-    pub ep_move: FaceMove,
-    pub e2: FaceMove,
-    pub s: FaceMove,
-    pub sp: FaceMove,
-    pub s2: FaceMove,
-    // wide (lowercase)
-    pub rw: FaceMove,
-    pub rwp: FaceMove,
-    pub rw2: FaceMove,
-    pub lw: FaceMove,
-    pub lwp: FaceMove,
-    pub lw2: FaceMove,
-    pub uw: FaceMove,
-    pub uwp: FaceMove,
-    pub uw2: FaceMove,
-    pub dw: FaceMove,
-    pub dwp: FaceMove,
-    pub dw2: FaceMove,
-    pub fw: FaceMove,
-    pub fwp: FaceMove,
-    pub fw2: FaceMove,
-    pub bw: FaceMove,
-    pub bwp: FaceMove,
-    pub bw2: FaceMove,
-    // rotations
     pub x: FaceMove,
     pub xp: FaceMove,
     pub x2: FaceMove,
@@ -217,126 +196,43 @@ pub struct MoveSet {
 
 impl MoveSet {
     pub fn build() -> Self {
-        let up = U.inverse();
-        let u2 = U.pow2();
-        let dp = D.inverse();
-        let d2 = D.pow2();
-        let rp = R.inverse();
-        let r2 = R.pow2();
-        let lp = L.inverse();
-        let l2 = L.pow2();
-        let fp = F.inverse();
-        let f2 = F.pow2();
-        let bp = B.inverse();
-        let b2 = B.pow2();
-
+        // Slice inverses are only needed to derive the rotations below.
         let mp = M.inverse();
-        let m2 = M.pow2();
         let ep_move = E.inverse();
-        let e2 = E.pow2();
-        let sp = S.inverse();
-        let s2 = S.pow2();
 
-        // r = R M'
-        let rw = R.then(&mp);
-        let rwp = rw.inverse();
-        let rw2 = rw.pow2();
-
-        // l = L M
-        let lw = L.then(&M);
-        let lwp = lw.inverse();
-        let lw2 = lw.pow2();
-
-        // u = U E'
-        let uw = U.then(&ep_move);
-        let uwp = uw.inverse();
-        let uw2 = uw.pow2();
-
-        // d = D E
-        let dw = D.then(&E);
-        let dwp = dw.inverse();
-        let dw2 = dw.pow2();
-
-        // f = F S
-        let fw = F.then(&S);
-        let fwp = fw.inverse();
-        let fw2 = fw.pow2();
-
-        // b = B S'
-        let bw = B.then(&sp);
-        let bwp = bw.inverse();
-        let bw2 = bw.pow2();
-
-        // x = R M' L'  (whole cube, R axis)
-        let x = R.then(&mp).then(&lp);
-        let xp = x.inverse();
-        let x2 = x.pow2();
-
-        // y = U E' D'  (whole cube, U axis)
-        let y = U.then(&ep_move).then(&dp);
-        let yp = y.inverse();
-        let y2 = y.pow2();
-
-        // z = F S B'  (whole cube, F axis)
-        let z = F.then(&S).then(&bp);
-        let zp = z.inverse();
-        let z2 = z.pow2();
+        // x = R M' L', y = U E' D', z = F S B'  (whole-cube rotations).
+        let x = R.then(&mp).then(&L.inverse());
+        let y = U.then(&ep_move).then(&D.inverse());
+        let z = F.then(&S).then(&B.inverse());
 
         Self {
             u: U,
-            up,
-            u2,
+            up: U.inverse(),
+            u2: U.pow2(),
             d: D,
-            dp,
-            d2,
+            dp: D.inverse(),
+            d2: D.pow2(),
             r: R,
-            rp,
-            r2,
+            rp: R.inverse(),
+            r2: R.pow2(),
             l: L,
-            lp,
-            l2,
+            lp: L.inverse(),
+            l2: L.pow2(),
             f: F,
-            fp,
-            f2,
+            fp: F.inverse(),
+            f2: F.pow2(),
             b: B,
-            bp,
-            b2,
-            m: M,
-            mp,
-            m2,
-            e: E,
-            ep_move,
-            e2,
-            s: S,
-            sp,
-            s2,
-            rw,
-            rwp,
-            rw2,
-            lw,
-            lwp,
-            lw2,
-            uw,
-            uwp,
-            uw2,
-            dw,
-            dwp,
-            dw2,
-            fw,
-            fwp,
-            fw2,
-            bw,
-            bwp,
-            bw2,
+            bp: B.inverse(),
+            b2: B.pow2(),
             x,
-            xp,
-            x2,
+            xp: x.inverse(),
+            x2: x.pow2(),
             y,
-            yp,
-            y2,
+            yp: y.inverse(),
+            y2: y.pow2(),
             z,
-            zp,
-            z2,
+            zp: z.inverse(),
+            z2: z.pow2(),
         }
     }
 
@@ -354,12 +250,9 @@ impl MoveSet {
             for r in set.clone() {
                 for g in &gens {
                     let c = r.then(g);
-                    let dup = set.iter().any(|e| {
-                        e.cp == c.cp
-                            && e.co == c.co
-                            && e.ep == c.ep
-                            && e.eo == c.eo
-                    });
+                    let dup = set
+                        .iter()
+                        .any(|e| e.cp == c.cp && e.co == c.co && e.ep == c.ep && e.eo == c.eo);
                     if !dup {
                         set.push(c);
                         added = true;

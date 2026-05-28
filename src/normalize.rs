@@ -30,24 +30,12 @@ pub fn strip_auf<'a>(moves: &'a [FaceMove], ms: &MoveSet) -> &'a [FaceMove] {
 }
 
 /// Like strip_auf but only strips from the start (for ZBLS pre-AUF).
-pub fn strip_auf_start<'a>(
-    moves: &'a [FaceMove],
-    ms: &MoveSet,
-) -> &'a [FaceMove] {
+pub fn strip_auf_start<'a>(moves: &'a [FaceMove], ms: &MoveSet) -> &'a [FaceMove] {
     let start = moves
         .iter()
         .position(|m| !is_auf(m, ms))
         .unwrap_or(moves.len());
     &moves[start..]
-}
-
-fn apply_u_k(state: &CubeState, k: usize) -> CubeState {
-    let u_move = FaceMove { ..U };
-    let mut s = *state;
-    for _ in 0..k {
-        s = s.apply(&u_move);
-    }
-    s
 }
 
 fn extract_ll_fingerprint(state: &CubeState) -> Vec<u8> {
@@ -78,10 +66,7 @@ fn extract_ll_fingerprint(state: &CubeState) -> Vec<u8> {
 /// last-layer alg). The bool is whether the LL edges are oriented (true ZBLL
 /// vs. an OLL-style case loosely labeled ZBLL); it is invariant across the AUF
 /// rotations, so reading it from any qualifying state is sufficient.
-pub fn zbll_canonical(
-    core: &[FaceMove],
-    rots: &[FaceMove],
-) -> Option<(ZbllCase, bool)> {
+pub fn zbll_canonical(core: &[FaceMove], rots: &[FaceMove]) -> Option<(ZbllCase, bool)> {
     let inv = invert_alg(core);
     let state = CubeState::solved().apply_alg(&inv);
 
@@ -137,14 +122,30 @@ fn extract_zbls_fingerprint(state: &CubeState) -> Vec<u8> {
 }
 
 /// Compute the canonical ZBLS case for an alg (leading AUF stripped).
-pub fn zbls_canonical(core: &[FaceMove]) -> ZblsCase {
+///
+/// Same rotation-aware scheme as `zbll_canonical`: apply the inverse to a
+/// solved cube, then for every cube rotation that lands "F2L-minus-the-FR-slot"
+/// solved (undoing any net rotation from wide/slice moves), read the ZBLS
+/// fingerprint over the 4 AUF turns and take the minimum. Returns `None` if no
+/// rotation qualifies (not a genuine last-slot alg).
+pub fn zbls_canonical(core: &[FaceMove], rots: &[FaceMove]) -> Option<ZblsCase> {
     let inv = invert_alg(core);
     let state = CubeState::solved().apply_alg(&inv);
 
-    let best = (0..4)
-        .map(|k| extract_zbls_fingerprint(&apply_u_k(&state, k)))
-        .min()
-        .unwrap();
-
-    ZblsCase(best)
+    let mut best: Option<Vec<u8>> = None;
+    for g in rots {
+        let s = state.apply(g);
+        if !s.f2l_minus_fr_solved() {
+            continue;
+        }
+        let mut t = s;
+        for _ in 0..4 {
+            let fp = extract_zbls_fingerprint(&t);
+            if best.as_ref().is_none_or(|b| &fp < b) {
+                best = Some(fp);
+            }
+            t = t.apply(&U);
+        }
+    }
+    best.map(ZblsCase)
 }
