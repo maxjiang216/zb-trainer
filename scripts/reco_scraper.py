@@ -12,8 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-import requests
-from bs4 import BeautifulSoup
+import requests  # type: ignore[import-untyped]
+from bs4 import BeautifulSoup  # type: ignore[import-not-found]
 
 BASE = "https://reco.nz"
 SESSION = requests.Session()
@@ -28,7 +28,8 @@ Record = dict[str, Any]
 def _cell(cells: list[Any], idx: int) -> str:
     """Return the stripped text of cell ``idx``, or "" if it is absent."""
     if idx < len(cells):
-        return cells[idx].get_text().strip()
+        # bs4 elements are untyped (Any); pin the result to str explicitly.
+        return str(cells[idx].get_text().strip())
     return ""
 
 
